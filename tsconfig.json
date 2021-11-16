@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "sourceMap": true,
+    "target": "es2019" ,
+    "experimentalDecorators": true,
+    "module": "commonjs",
+    "declaration": true,
+    "outDir": "./dist/" ,
+    "downlevelIteration": true,
+    "strict": true ,
+    "esModuleInterop": true ,
+    "forceConsistentCasingInFileNames": true
+  },
+}
