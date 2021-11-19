@@ -5,19 +5,27 @@ type Item = { callback: Function, event: Event };
 
 /**
  * A queue that allows long polling, emulating SQS
+ * 
+ * Specific behavior:
+ * 
+ * If there are no items in queue:
+ *    shrink number of workers until there is only 1.
+ * 
+ * If there are items in queue:
+ *    assign the first 0-10 to a free worker as soon as one is available
+ *    if there is only one worker, after the fifth batch read, start scaling up instances
  */
 export class LongPollFIFOQueue implements ServiceQueue {
   public readonly items: Item[] = [];
   private workers: Worker[] = [];
   private capacity: number = 0;
 
+
+  private batchSize:number = 10;
+
   constructor(capacity: number) {
     this.setCapacity(capacity);
     this.setNumWorkers(1);
-
-    metronome.setInterval(() => {
-
-    })
   }
 
   async enqueue(event: Event): Promise<Worker> {
@@ -95,13 +103,19 @@ export class LongPollFIFOQueue implements ServiceQueue {
     if (!this.hasWorkToDo())
       return;
 
-    const nextUp: Item = this.items.shift() as Item
+    const nextUp: Item[] = this.items.splice(0, this.batchSize) as Item[]
     const worker = this.workers.find(w => w.event == null) as Worker;
     this.assignWorkToWorker(worker, nextUp);
   }
 
-  private assignWorkToWorker(worker: Worker, item: Item) {
-    worker.event = item.event;
+  private assignWorkToWorker(worker: Worker, items: Item[]) {
+    const sqsEvent = new SQSEvent("sqs-event");
+    const events = items.map(x => x.event);
+
+    sqsEvent.messages = events;
+    items.forEach(item => item.callback(null, worker));
+    sqsEvent.messages = items.map(x => x.event);
+    worker.event = sqsEvent
     item.callback(null, worker);
   }
 
@@ -118,11 +132,12 @@ export class LongPollFIFOQueue implements ServiceQueue {
    */
   private add(item: Item): void {
     // process immediately by assigning a free worker
-    /*if (this.hasFreeWorker()) {
+    if (this.hasFreeWorker()) {
       const worker = this.workers.find(w => w.event == null) as Worker;
-      this.assignWorkToWorker(worker, item);
+      this.assignWorkToWorker(worker, [item]);
       return;
-    }*/
+    }
+
 
     // defer to later by appending to the item queue
     if (this.canEnqueue()) {
@@ -136,14 +151,16 @@ export class LongPollFIFOQueue implements ServiceQueue {
   }
 }
 
-class SQSWorker extends Worker {
-  /**
-   * Unlocks the worker to be freed, so it can process another event on the
-   * queue, if it is still attached to one.
-   */
-  public free() {
-    this.event = null;
-    if (this.queue)
-      this.queue.work();
+export class SQSEvent extends Event {
+  private _messages: Event[] = [];
+  private count:number = 0;
+
+  public get messages(): Event[] {
+    return this._messages;
+  }
+  public set messages(value: Event[]) {
+    this._messages = value;
+    this.count = this._messages.length
   }
 }
+// TODO: need to have worker keep track of how many events have been fulfilled so it can return or not.
