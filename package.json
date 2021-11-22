@@ -4,7 +4,7 @@
   "description": "",
   "main": "dist/index.js",
   "scripts": {
-    "start": "ts-node src/simple_classes.ts"
+    "start": "ts-node src/index.ts"
   },
   "author": "",
   "license": "ISC",

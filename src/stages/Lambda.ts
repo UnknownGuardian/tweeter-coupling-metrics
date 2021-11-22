@@ -1,5 +1,5 @@
 import { Event, FIFOServiceQueue, metronome, Stage, WrappedStage } from "@byu-se/quartermaster";
-import { DynamoDB } from "./DynamoDB";
+import { BatchWriteEvent, DynamoDB } from "./DynamoDB";
 import { LongPollFIFOQueue } from "./long-poll-fifo-queue";
 import { SQS } from "./SQS";
 
@@ -24,7 +24,31 @@ export class AddToFeedHandler extends Lambda {
     }
 
     async workOn(event: WriteToFollowersEvent): Promise<void> {
-        await this.feedTable.accept(event);
+        const copy = event.innerEvents.slice();
+        while (copy.length > 0) {
+            const subset = copy.splice(0, 25); // max 25 in a batch write
+
+            const batchWriteEvent = new BatchWriteEvent(event.key + ":batchwrite");
+            batchWriteEvent.numOperationsRequested = subset.length;
+
+            // loop until we have capacity
+            while (true) {
+
+                if (!metronome.isRunning()) {
+                    console.log("inner loop");
+                    break;
+                }
+                try {
+                    await this.feedTable.accept(batchWriteEvent)
+                    console.log(`${metronome.now()} Wrote batch of ${batchWriteEvent.numOperationsRequested} successfully`);
+                    break;
+                } catch (e) {
+                    /* insufficient capacity */
+                    await metronome.wait(15);
+                    //console.log(`${metronome.now()} Insufficient Capacity - ${batchWriteEvent.numOperationsFulfilled} / ${batchWriteEvent.numOperationsRequested}`)
+                }
+            }
+        }
     }
 }
 
@@ -56,7 +80,12 @@ export class GetFollowersHandler extends Lambda {
             const queueEvent = new WriteToFollowersEvent(event.key + ":batch:");
             queueEvent.innerEvents.push(...batch);
 
-            await this.addToFeedHandler.accept(queueEvent);
+
+            // non blocking
+            this.addToFeedHandler.accept(queueEvent);
+            await metronome.wait(2);
+
+            //console.log("Added data to queue", this.addToFeedHandler.inQueue.length());
         }
     }
 }
@@ -65,12 +94,18 @@ export class PostHandler extends Lambda {
     constructor(
         public authTable: DynamoDB,
         public storyTable: DynamoDB,
-        public getFollowersHandler: Lambda
+        public getFollowersHandler: Lambda,
+        public simulationTerminationSignal: Promise<any>
     ) { super(); }
 
     async workOn(event: Event): Promise<void> {
         await this.authTable.accept(event);
+        console.log("Cat 1");
         await this.storyTable.accept(event);
+        console.log("Cat 2");
         await this.getFollowersHandler.accept(event);
+        console.log("Cat 3");
+        await this.simulationTerminationSignal;
+        console.log("Cat 4");
     }
 }

@@ -14,18 +14,26 @@ type Item = { callback: Function, event: Event };
  * If there are items in queue:
  *    assign the first 0-10 to a free worker as soon as one is available
  *    if there is only one worker, after the fifth batch read, start scaling up instances
+ * 
+ * TODO: Care about scaling down.
  */
 export class LongPollFIFOQueue implements ServiceQueue {
   public readonly items: Item[] = [];
-  private workers: Worker[] = [];
+  private workers: SQSWorker[] = [];
   private capacity: number = 0;
 
 
-  private batchSize:number = 10;
+  private batchSize: number = 10;
+  private sequentialCallsWithEvents: number = 0;
+  private lastScaleUpAt: number = 0; // scale at a rate of 1 per second
 
   constructor(capacity: number) {
     this.setCapacity(capacity);
     this.setNumWorkers(1);
+
+    metronome.setTimeout(() => {
+      console.log("QUEUE DATA", this.items.length, this.workers.length);
+    }, 2000);
   }
 
   async enqueue(event: Event): Promise<Worker> {
@@ -67,7 +75,7 @@ export class LongPollFIFOQueue implements ServiceQueue {
 
     if (num > this.workers.length) {
       while (this.workers.length < num) {
-        this.workers.push(new Worker(this));
+        this.workers.push(new SQSWorker(this));
         this.work();
       }
     } else {
@@ -95,28 +103,56 @@ export class LongPollFIFOQueue implements ServiceQueue {
     return this.workers.some(w => w.event == null);
   }
 
-
+  // triggered by 
+  // 1) a new worker creation (no work ever having been performed)
+  // 2) an existing worker wants work (already performed work)
   work(): void {
-    if (!this.hasFreeWorker())
+    if (!this.hasFreeWorker()) {
+      // in theory impossible
+      throw "why is this being called";
+      this.sequentialCallsWithEvents = 0;
       return;
+    }
 
-    if (!this.hasWorkToDo())
+    if (!this.hasWorkToDo()) {
+      // the worker doesn't have anything to do.
+      this.sequentialCallsWithEvents = 0;
+      //console.log("oof");
       return;
+    }
+
 
     const nextUp: Item[] = this.items.splice(0, this.batchSize) as Item[]
-    const worker = this.workers.find(w => w.event == null) as Worker;
+    const worker = this.workers.find(w => w.event == null) as SQSWorker;
     this.assignWorkToWorker(worker, nextUp);
+
+    this.sequentialCallsWithEvents++;
+    if (this.sequentialCallsWithEvents > 5) {
+      if (metronome.now() - this.lastScaleUpAt > 1_000) {
+        this.lastScaleUpAt = metronome.now();
+
+        console.log(`${metronome.now()} scaling up`);
+        this.setNumWorkers(this.getNumWorkers() + 1);
+      }
+    }
   }
 
-  private assignWorkToWorker(worker: Worker, items: Item[]) {
-    const sqsEvent = new SQSEvent("sqs-event");
+  private assignWorkToWorker(worker: SQSWorker, items: Item[]) {
     const events = items.map(x => x.event);
 
+    const sqsEvent = new SQSEvent("sqs-event");
     sqsEvent.messages = events;
+
+    worker.event = sqsEvent;
+
+    /*// recently freed and being assigned again
+    if (metronome.now() - worker.lastFreeTime < 2) {
+      worker.sequentialCalls++;
+    } else {
+      worker.sequentialCalls = 0;
+    }*/
+
     items.forEach(item => item.callback(null, worker));
-    sqsEvent.messages = items.map(x => x.event);
-    worker.event = sqsEvent
-    item.callback(null, worker);
   }
 
   private hasWorkToDo(): boolean {
@@ -133,7 +169,7 @@ export class LongPollFIFOQueue implements ServiceQueue {
   private add(item: Item): void {
     // process immediately by assigning a free worker
     if (this.hasFreeWorker()) {
-      const worker = this.workers.find(w => w.event == null) as Worker;
+      const worker = this.workers.find(w => w.event == null) as SQSWorker;
       this.assignWorkToWorker(worker, [item]);
       return;
     }
@@ -142,7 +178,6 @@ export class LongPollFIFOQueue implements ServiceQueue {
     // defer to later by appending to the item queue
     if (this.canEnqueue()) {
       this.items.push(item);
-      //this.work();
       return;
     }
 
@@ -153,7 +188,7 @@ export class LongPollFIFOQueue implements ServiceQueue {
 
 export class SQSEvent extends Event {
   private _messages: Event[] = [];
-  private count:number = 0;
+  private count: number = 0;
 
   public get messages(): Event[] {
     return this._messages;
@@ -163,4 +198,13 @@ export class SQSEvent extends Event {
     this.count = this._messages.length
   }
 }
-// TODO: need to have worker keep track of how many events have been fulfilled so it can return or not.
+
+export class SQSWorker extends Worker {
+  /*public sequentialCalls = 0;
+  public lastFreeTime = 0;
+
+  public free() {
+    this.lastFreeTime = metronome.now();
+    super.free();
+  }*/
+}
