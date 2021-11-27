@@ -35,7 +35,7 @@ async function run() {
         storyTable,
         feedTable,
         followsTable
-    ], [tableSize])
+    ], [tableSize, unusedCapacity])
 
     console.log("Metronome may have terminated this simulation early", metronome.now())
 }
@@ -46,6 +46,16 @@ const tableSize = {
     func: (stage: Stage) => {
         if (stage instanceof DynamoDB) {
             return stage.tableDataLength;
+        } else {
+            return 0;
+        }
+    }
+}
+const unusedCapacity = {
+    name: "Unused Capacity",
+    func: (stage: Stage) => {
+        if (stage instanceof DynamoDB) {
+            return stage.unusedCapacity;
         } else {
             return 0;
         }

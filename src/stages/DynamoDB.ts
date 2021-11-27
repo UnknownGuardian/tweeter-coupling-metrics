@@ -13,6 +13,8 @@ export class DynamoDB extends Stage {
 
     public tableDataLength: number = 0;
 
+    public unusedCapacity:number = 0;
+
     constructor(
     ) {
         super();
@@ -20,8 +22,9 @@ export class DynamoDB extends Stage {
     }
 
     resetCapacities(): void {
+        this.unusedCapacity += this.maxCapacity - this.usedCapacity;
         //console.log(this.constructor.name, "Using capacity", this.usedCapacity, "of", this.maxCapacity);
-        this.usedCapacity = Math.max(this.usedCapacity - this.maxCapacity, 0);
+        this.usedCapacity = 0;//Math.max(this.usedCapacity - this.maxCapacity, 0);
     }
 
 
@@ -73,7 +76,7 @@ export class FeedTable extends DynamoDB {
     constructor() {
         super();
         this.averageLatency = 15;
-        this.maxCapacity = 150;
+        this.maxCapacity = 100;
         /*metronome.setInterval(() => {
             console.log(metronome.now(), this.constructor.name, "Used capacity", this.usedCapacity, "of", this.maxCapacity);
         }, 50);*/

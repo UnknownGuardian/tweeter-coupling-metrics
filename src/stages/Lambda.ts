@@ -44,7 +44,7 @@ export class AddToFeedHandler extends Lambda {
                     break;
                 } catch (e) {
                     /* insufficient capacity */
-                    await metronome.wait(15);
+                    await metronome.wait(100);
                     //console.log(`${metronome.now()} Insufficient Capacity - ${batchWriteEvent.numOperationsFulfilled} / ${batchWriteEvent.numOperationsRequested}`)
                 }
             }
